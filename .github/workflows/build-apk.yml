@@ -24,36 +24,35 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Instalar dependencias del sistema y Buildozer
+      - name: Instalar dependencias de compilación
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential git ccache libffi-dev libssl-dev \
             zlib1g-dev openjdk-17-jdk unzip zip autoconf libtool \
-            pkg-config libncurses5-dev libncursesw5-dev libtinfo5 cmake lld
+            pkg-config libncurses5-dev libncursesw5-dev libtinfo5 cmake lld clang \
+            patch gettext libltdl-dev
           pip install --upgrade pip setuptools wheel
-          pip install "cython<3.0.0" buildozer
+          pip install "cython<3.0.0" "buildozer>=1.5.0"
 
       - name: Construir APK con Buildozer
         run: |
           if [ -f "buildozer.spec" ]; then
-            echo "Modo: Archivos en la raíz"
-            buildozer android debug
+            DIR="."
           elif [ -f "LM_Android/buildozer.spec" ]; then
-            echo "Modo: Archivos dentro de LM_Android/"
-            cd LM_Android
-            buildozer android debug
+            DIR="LM_Android"
           else
-            echo "Buscando buildozer.spec..."
-            SPEC_DIR=$(find . -name "buildozer.spec" -exec dirname {} \; | head -n 1)
-            if [ -n "$SPEC_DIR" ]; then
-              cd "$SPEC_DIR"
-              buildozer android debug
-            else
-              echo "Error: No se encontró el archivo buildozer.spec en el repositorio."
-              exit 1
-            fi
+            DIR=$(find . -name "buildozer.spec" -exec dirname {} \; | head -n 1)
           fi
+
+          if [ -z "$DIR" ]; then
+            echo "Error: No se encontró buildozer.spec en el repositorio."
+            exit 1
+          fi
+
+          cd "$DIR"
+          export APP_ANDROID_ACCEPT_SDK_LICENSE=1
+          yes | buildozer android debug
 
       - name: Guardar el APK
         uses: actions/upload-artifact@v4
