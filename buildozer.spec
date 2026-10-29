@@ -6,7 +6,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json
 source.exclude_dirs = .github,bin,.buildozer,__pycache__
 version = 1.0
-requirements = python3==3.11.8,kivy==2.3.0,openpyxl,et_xmlfile,pyjnius,android,androidstorage4kivy
+requirements = python3==3.11.8,hostpython3==3.11.8,kivy==2.3.0,openpyxl,et_xmlfile,pyjnius,android,androidstorage4kivy
 orientation = portrait
 fullscreen = 0
 android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
