@@ -29,17 +29,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential git ccache libffi-dev libssl-dev \
-            zlib1g-dev openjdk-17-jdk unzip zip
-          pip install --upgrade pip
+            zlib1g-dev openjdk-17-jdk unzip zip autoconf libtool \
+            pkg-config libncurses5-dev libncursesw5-dev libtinfo5 cmake lld
+          pip install --upgrade pip setuptools wheel
           pip install "cython<3.0.0" buildozer
 
       - name: Construir APK con Buildozer
         run: |
-          cd LM_Android
-          buildozer android debug
+          if [ -f "buildozer.spec" ]; then
+            echo "Modo: Archivos en la raíz"
+            buildozer android debug
+          elif [ -f "LM_Android/buildozer.spec" ]; then
+            echo "Modo: Archivos dentro de LM_Android/"
+            cd LM_Android
+            buildozer android debug
+          else
+            echo "Buscando buildozer.spec..."
+            SPEC_DIR=$(find . -name "buildozer.spec" -exec dirname {} \; | head -n 1)
+            if [ -n "$SPEC_DIR" ]; then
+              cd "$SPEC_DIR"
+              buildozer android debug
+            else
+              echo "Error: No se encontró el archivo buildozer.spec en el repositorio."
+              exit 1
+            fi
+          fi
 
       - name: Guardar el APK
         uses: actions/upload-artifact@v4
         with:
           name: LM-Palabras-apk
-          path: LM_Android/bin/*.apk
+          path: "**/bin/*.apk"
