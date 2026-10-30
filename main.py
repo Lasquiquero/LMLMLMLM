@@ -40,6 +40,8 @@ OSCURO = {k: hexc(v) for k, v in _O.items()}
 T = dict(CLARO)
 ESC = 1.0
 BLANCO = (1, 1, 1, 1)
+REQ_ARCHIVOS = 4711                      # código de la petición del selector de Android
+EXT_OK = (".csv", ".txt", ".xlsx", ".xls")
 
 
 def fs(n):
@@ -380,42 +382,96 @@ class LMApp(App):
     def importar(self):
         if platform == "android":
             try:
-                from androidstorage4kivy import Chooser
-                self._chooser = Chooser(self._al_elegir)
-                try:
-                    self._chooser.choose_content("*/*", multiple=True)
-                except TypeError:
-                    self._chooser.choose_content("*/*")
-                return
-            except Exception:
-                pass
+                self._selector_android()
+            except Exception as e:
+                self.aviso("No se pudo abrir el selector de archivos", f"{type(e).__name__}: {e}")
+            return
         self.explorador()
 
-    def _al_elegir(self, uris):
-        if not uris:
-            return
-        rutas = []
+    def _selector_android(self):
+        """Selector oficial de Android (Storage Access Framework): no necesita permisos de
+        almacenamiento, y la app recibe un acceso temporal al archivo que elijas."""
+        from android import activity
+        from jnius import autoclass
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        Intent = autoclass("android.content.Intent")
+        intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        intent.setType("*/*")
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
         try:
-            from androidstorage4kivy import SharedStorage
-            ss = SharedStorage()
-            for u in uris:
-                try:
-                    p = ss.copy_from_shared(u)
-                except Exception:
-                    p = None
-                if p:
-                    rutas.append(p)
+            activity.unbind(on_activity_result=self._resultado_android)
         except Exception:
             pass
-        Clock.schedule_once(lambda dt: self.agregar_archivos(rutas), 0)
+        activity.bind(on_activity_result=self._resultado_android)
+        PythonActivity.mActivity.startActivityForResult(intent, REQ_ARCHIVOS)
+
+    def _resultado_android(self, request_code, result_code, intent):
+        if request_code != REQ_ARCHIVOS:
+            return
+        try:
+            from android import activity
+            activity.unbind(on_activity_result=self._resultado_android)
+        except Exception:
+            pass
+        if result_code != -1 or intent is None:               # -1 = RESULT_OK
+            return
+        rutas, errores = [], []
+        try:
+            from jnius import autoclass
+            resolver = autoclass("org.kivy.android.PythonActivity").mActivity.getContentResolver()
+            uris = []
+            clip = intent.getClipData()
+            if clip is not None:                               # varios archivos
+                for k in range(clip.getItemCount()):
+                    uris.append(clip.getItemAt(k).getUri())
+            elif intent.getData() is not None:                 # un solo archivo
+                uris.append(intent.getData())
+            for u in uris:
+                try:
+                    rutas.append(self._copiar_uri(resolver, u))
+                except Exception as e:
+                    errores.append(f"{type(e).__name__}: {e}")
+        except Exception as e:
+            errores.append(f"{type(e).__name__}: {e}")
+        Clock.schedule_once(lambda dt: self.agregar_archivos(rutas, errores), 0)
+
+    def _copiar_uri(self, resolver, uri):
+        """Copia el contenido de un archivo elegido en el selector a la carpeta privada de la app."""
+        nombre = None
+        cur = resolver.query(uri, None, None, None, None)
+        try:
+            if cur is not None and cur.moveToFirst():
+                idx = cur.getColumnIndex("_display_name")
+                if idx >= 0:
+                    nombre = cur.getString(idx)
+        finally:
+            if cur is not None:
+                cur.close()
+        nombre = re.sub(r'[\\/:*?"<>|]', "_", nombre or "lista")
+        destino = os.path.join(self.dir_listas, nombre)
+        pfd = resolver.openFileDescriptor(uri, "r")
+        fd = pfd.detachFd()                                   # el archivo pasa a ser nuestro
+        with os.fdopen(fd, "rb") as origen, open(destino, "wb") as salida:
+            shutil.copyfileobj(origen, salida)
+        return self._arreglar_extension(destino)
+
+    def _arreglar_extension(self, destino):
+        """Si el archivo no trae extensión conocida, se reconoce por su contenido."""
+        base, ext = os.path.splitext(destino)
+        if ext.lower() in EXT_OK:
+            return destino
+        with open(destino, "rb") as f:
+            cab = f.read(2)
+        nuevo = (base or destino) + (".xlsx" if cab == b"PK" else ".csv")
+        os.replace(destino, nuevo)
+        return nuevo
 
     def explorador(self):
-        """Selector de archivos propio (ordenador, o Android si falla el del sistema)."""
+        """Selector de archivos propio de Kivy (solo para probar en el ordenador)."""
         from kivy.uix.filechooser import FileChooserListView
-        inicio = os.path.expanduser("~")
-        if platform == "android" and os.path.isdir("/storage/emulated/0"):
-            inicio = "/storage/emulated/0"
-        fc = FileChooserListView(path=inicio, multiselect=True, filters=["*.csv", "*.txt", "*.xlsx"])
+        fc = FileChooserListView(path=os.path.expanduser("~"), multiselect=True,
+                                 filters=["*.csv", "*.txt", "*.xlsx"])
         c = BoxLayout(orientation="vertical", spacing=dp(8))
         c.add_widget(fc)
         p = self.abrir_popup("Elige tus listas", c, 0.92)
@@ -425,20 +481,14 @@ class LMApp(App):
         c.add_widget(f)
 
     def a_biblioteca(self, ruta):
-        """Copia la lista a la carpeta de la app (así no hay que volver a importarla)."""
-        nombre = os.path.basename(ruta)
-        base, ext = os.path.splitext(nombre)
-        if ext.lower() not in (".csv", ".txt", ".xlsx", ".xls"):
-            with open(ruta, "rb") as f:
-                ext = ".xlsx" if f.read(2) == b"PK" else ".csv"
-            nombre = (base or "lista") + ext
-        destino = os.path.join(self.dir_listas, nombre)
+        """Copia un archivo normal (modo ordenador) a la carpeta de la app."""
+        destino = os.path.join(self.dir_listas, os.path.basename(ruta))
         if os.path.abspath(ruta) != os.path.abspath(destino):
-            shutil.copy2(ruta, destino)
-        return destino
+            shutil.copyfile(ruta, destino)                    # sin copiar permisos ni fechas
+        return self._arreglar_extension(destino)
 
-    def agregar_archivos(self, rutas):
-        errores = []
+    def agregar_archivos(self, rutas, errores=None):
+        errores = list(errores or [])
         for r in rutas:
             try:
                 destino = self.a_biblioteca(r)
